@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "CodexNotify"),
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "AgentNotify"),
     [string]$SourceUrl = "",
+    [ValidateSet("codex", "claude", "all")]
+    [string]$Target = "codex",
     [switch]$NoConfig,
     [switch]$Uninstall
 )
@@ -9,11 +11,14 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
-$programName = "codex-notify.ps1"
+$programName = "agent-notify.ps1"
 $defaultSourceUrl = "https://raw.githubusercontent.com/Huffer342-WSH/" +
-    "Codex-Notify/refs/heads/main/codex-notify.ps1"
+    "agent-notify/refs/heads/main/agent-notify.ps1"
 $installPath = Join-Path $InstallDir $programName
-$launcherName = "codex-notify-activate.vbs"
+$legacyPath = Join-Path $InstallDir "codex-notify.ps1"
+$legacyDefaultPath = Join-Path (Join-Path $env:LOCALAPPDATA "CodexNotify") "codex-notify.ps1"
+$ownedPaths = @($installPath, $legacyPath, $legacyDefaultPath) | Select-Object -Unique
+$launcherName = "agent-notify-activate.vbs"
 $launcherPath = Join-Path $InstallDir $launcherName
 $codexDir = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
     Join-Path $HOME ".codex"
@@ -21,8 +26,12 @@ $codexDir = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
     $env:CODEX_HOME
 }
 $configPath = Join-Path $codexDir "config.toml"
-$backupPath = $configPath + ".codex-notify.bak"
-$protocolPath = "HKCU:\Software\Classes\codex-notify"
+$backupPath = $configPath + ".agent-notify.bak"
+$protocolPath = "HKCU:\Software\Classes\agent-notify"
+$claudeDir = if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) {
+    Join-Path $HOME ".claude"
+} else { $env:CLAUDE_CONFIG_DIR }
+$claudeConfigPath = Join-Path $claudeDir "settings.json"
 
 function ConvertTo-JsonString {
     param([string]$Value)
@@ -71,7 +80,7 @@ function Write-NotificationDurationWarning {
     if ($null -ne $duration -and [int]$duration -lt 30) {
         Write-Warning (
             "Windows currently dismisses notification banners after $duration seconds. " +
-            "To keep Codex notifications visible longer, open Settings > Accessibility > " +
+            "To keep Agent Notify banners visible longer, open Settings > Accessibility > " +
             "Visual effects > Dismiss notifications after this amount of time. " +
             "This global setting is not changed by the installer."
         )
@@ -90,7 +99,7 @@ Dim fileSystem, shell, scriptPath, activationUri, command
 Set fileSystem = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 
-scriptPath = fileSystem.BuildPath(fileSystem.GetParentFolderName(WScript.ScriptFullName), "codex-notify.ps1")
+scriptPath = fileSystem.BuildPath(fileSystem.GetParentFolderName(WScript.ScriptFullName), "agent-notify.ps1")
 activationUri = WScript.Arguments(0)
 command = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & scriptPath & """ -ActivationUri """ & activationUri & """"
 
@@ -118,13 +127,13 @@ function Update-ActivationProtocol {
 
     if (Test-Path -LiteralPath $protocolPath) {
         $description = (Get-Item -LiteralPath $protocolPath).GetValue("")
-        if ($description -and $description -ne "URL:Codex Notify") {
-            throw "The codex-notify URL protocol is already owned by another application."
+        if ($description -and $description -ne "URL:Agent Notify") {
+            throw "The agent-notify URL protocol is already owned by another application."
         }
     }
 
     [void](New-Item -Path $commandPath -Force)
-    Set-Item -LiteralPath $protocolPath -Value "URL:Codex Notify"
+    Set-Item -LiteralPath $protocolPath -Value "URL:Agent Notify"
     New-ItemProperty -LiteralPath $protocolPath -Name "URL Protocol" -Value "" `
         -PropertyType String -Force > $null
     Set-Item -LiteralPath $commandPath -Value $expectedCommand
@@ -146,6 +155,7 @@ function Update-CodexConfig {
     }
 
     $configuration = Get-NotifyConfiguration $installPath
+    $ownedConfigurations = @($ownedPaths | ForEach-Object { Get-NotifyConfiguration $_ })
     $firstTable = [regex]::Match($text, '(?m)^\s*\[')
     $topLength = if ($firstTable.Success) { $firstTable.Index } else { $text.Length }
     $top = $text.Substring(0, $topLength)
@@ -180,10 +190,10 @@ function Update-CodexConfig {
                 $line = $configuration.Direct
             }
         } else {
-            if ($line -eq $configuration.Direct) {
+            if ($line -cin @($ownedConfigurations | ForEach-Object { $_.Direct })) {
                 $line = ""
             } elseif ($nestedMatch.Success -and
-                $nestedMatch.Groups["value"].Value -eq $configuration.Nested) {
+                $nestedMatch.Groups["value"].Value -cin @($ownedConfigurations | ForEach-Object { $_.Nested })) {
                 $remove = $nestedMatch.Groups["remove"]
                 $line = $line.Remove($remove.Index, $remove.Length)
             } else {
@@ -214,28 +224,115 @@ function Update-CodexConfig {
     return $true
 }
 
+function Get-ClaudeCommand {
+    param([string]$ScriptPath)
+    $invocation = "& '" + $ScriptPath.Replace("'", "''") + "' -Claude"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($invocation))
+    return "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+}
+
+function Update-ClaudeConfig {
+    param([ValidateSet("Install", "Uninstall")][string]$Mode)
+
+    if ($Mode -eq "Uninstall" -and -not (Test-Path -LiteralPath $claudeConfigPath)) {
+        return
+    }
+    # EncodedCommand avoids path interpolation by either Bash or PowerShell.
+    $commands = @($ownedPaths | ForEach-Object { Get-ClaudeCommand $_ })
+    $command = Get-ClaudeCommand $installPath
+    $settings = if (Test-Path -LiteralPath $claudeConfigPath) {
+        [IO.File]::ReadAllText($claudeConfigPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    } else { [pscustomobject]@{} }
+    if ($null -eq $settings -or $settings -isnot [pscustomobject]) {
+        throw "Claude settings must be a JSON object."
+    }
+    if (-not $settings.PSObject.Properties["hooks"]) {
+        $settings | Add-Member NoteProperty hooks ([pscustomobject]@{})
+    }
+    $hooks = $settings.hooks
+    if ($null -eq $hooks -or $hooks -isnot [pscustomobject]) {
+        throw "Claude hooks must be a JSON object."
+    }
+    $entries = if ($hooks.PSObject.Properties["Stop"]) { @($hooks.Stop) } else { @() }
+    $updated = @(
+        foreach ($entry in $entries) {
+            $handlers = @($entry.hooks)
+            $kept = @($handlers | Where-Object {
+                -not ($_.PSObject.Properties["type"] -and $_.type -eq "command" -and
+                    $_.PSObject.Properties["command"] -and $_.command -cin $commands)
+            })
+            if ($kept.Count -eq $handlers.Count) { $entry }
+            elseif ($kept.Count -gt 0) { $entry.hooks = $kept; $entry }
+        }
+    )
+    if ($Mode -eq "Install") {
+        $updated += [pscustomobject]@{ hooks = @(
+            [pscustomobject]@{ type = "command"; command = $command; timeout = 10 }
+        ) }
+    }
+    if ($updated.Count -gt 0) {
+        $hooks | Add-Member NoteProperty Stop $updated -Force
+    } else { $hooks.PSObject.Properties.Remove("Stop") }
+    if (@($hooks.PSObject.Properties).Count -eq 0) {
+        $settings.PSObject.Properties.Remove("hooks")
+    }
+    $json = ConvertTo-Json -InputObject $settings -Depth 100
+    [void](New-Item -ItemType Directory -Path $claudeDir -Force)
+    if (Test-Path -LiteralPath $claudeConfigPath) {
+        Copy-Item -LiteralPath $claudeConfigPath -Destination ($claudeConfigPath + ".agent-notify.bak") -Force
+    }
+    Set-Utf8Text $claudeConfigPath ($json + [Environment]::NewLine)
+}
+
+function Update-SelectedConfig {
+    param([string]$Mode)
+    if ($Target -in @("codex", "all")) { [void](Update-CodexConfig $Mode) }
+    if ($Target -in @("claude", "all")) { Update-ClaudeConfig $Mode }
+}
+
+function Test-SharedConfiguration {
+    # Only files installed in this directory depend on this installation.
+    foreach ($path in @($installPath, $legacyPath)) {
+        if (Test-Path -LiteralPath $configPath) {
+            $text = [IO.File]::ReadAllText($configPath)
+            $escaped = ConvertTo-JsonString $path
+            if ($text.Contains($escaped)) { return $true }
+            $nested = (Get-NotifyConfiguration $path).Nested
+            if ($text.Contains($nested)) { return $true }
+        }
+        if (Test-Path -LiteralPath $claudeConfigPath) {
+            $text = [IO.File]::ReadAllText($claudeConfigPath)
+            if ($text.Contains((Get-ClaudeCommand $path))) { return $true }
+        }
+    }
+    return $false
+}
+
 if ($Uninstall) {
-    $configChanged = $false
     $protocolChanged = $false
     if (-not $NoConfig) {
-        $configChanged = Update-CodexConfig "Uninstall"
+        Update-SelectedConfig "Uninstall"
+        if (Test-SharedConfiguration) {
+            Write-Host "Removed selected configuration; retained shared executable and activation protocol."
+            exit 0
+        }
         $protocolChanged = Update-ActivationProtocol "Uninstall"
     }
     if (Test-Path -LiteralPath $installPath) {
         Remove-Item -LiteralPath $installPath -Force
+    }
+    if (Test-Path -LiteralPath $legacyPath) {
+        Remove-Item -LiteralPath $legacyPath -Force
     }
     if (Test-Path -LiteralPath $launcherPath) {
         Remove-Item -LiteralPath $launcherPath -Force
     }
 
     Write-Host "Removed $programName from $installPath"
-    if ($configChanged) {
-        Write-Host "Removed its Codex notify configuration from $configPath"
-    }
     if ($protocolChanged) {
-        Write-Host "Removed the codex-notify activation protocol."
+        Write-Host "Removed the agent-notify activation protocol."
     }
-    Write-Host "Restart Codex to apply the change."
+    Write-Host "Restart the selected clients to apply the change."
     exit 0
 }
 
@@ -275,6 +372,7 @@ try {
     }
 
     Move-Item -LiteralPath $temporaryPath -Destination $installPath -Force
+    Copy-Item -LiteralPath $installPath -Destination $legacyPath -Force
     Install-ActivationLauncher
 } finally {
     if (Test-Path -LiteralPath $temporaryPath) {
@@ -283,17 +381,17 @@ try {
 }
 
 if (-not $NoConfig) {
-    [void](Update-CodexConfig "Install")
+    Update-SelectedConfig "Install"
     [void](Update-ActivationProtocol "Install")
 }
 
 Write-Host "Installed $programName to $installPath"
 if (-not $NoConfig) {
-    Write-Host "Configured Codex notify in $configPath"
-    Write-Host "Registered the codex-notify activation protocol for notification clicks."
+    Write-Host "Configured $Target notifications (Codex: $configPath; Claude: $claudeConfigPath)"
+    Write-Host "Registered the agent-notify activation protocol for notification clicks."
     if (Test-Path -LiteralPath $backupPath) {
         Write-Host "Backup: $backupPath"
     }
 }
 Write-NotificationDurationWarning
-Write-Host "Restart Codex to apply the change."
+Write-Host "Restart the selected clients to apply the change."

@@ -1,233 +1,272 @@
-# Codex Notify
+# Agent Notify
 
-面向 Linux 和 Windows 桌面的 Codex 回复完成通知工具。当 Codex 完成一轮回复后，它会
-发送桌面通知，方便你在处理其他事情时及时回来查看结果。
+面向编程 Agent 的桌面通知工具，支持 Linux 和 Windows。当 Agent 完成一轮回复后，
+Agent Notify 会发送桌面通知，点击通知可尝试返回原来的编辑器或终端窗口。
+
+支持 Codex CLI、Codex VS Code 插件，以及通过 `Stop` Hook 接入的 Claude Code VS Code
+插件。Claude Code CLI 共用同一份 Hook 配置，也会触发通知。
 
 ## 安装
 
-### 在线一键安装
-
-Windows 10/11 使用系统自带的 Windows PowerShell 5.1，不需要 Python或第三方模块：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Huffer342-WSH/Codex-Notify/refs/heads/main/install.ps1 | iex"
-```
-
-Linux 需要 Python 3，以及 `curl` 或 `wget`：
-
-```bash
-curl -LsSf https://raw.githubusercontent.com/Huffer342-WSH/Codex-Notify/refs/heads/main/install.sh | sh
-```
-
-在线安装器会自动下载主程序，无需克隆仓库或手动指定下载地址：
-
-- Windows：`https://raw.githubusercontent.com/Huffer342-WSH/Codex-Notify/refs/heads/main/codex-notify.ps1`
-- Linux：`https://raw.githubusercontent.com/Huffer342-WSH/Codex-Notify/refs/heads/main/codex-notify.py`
-
-安装完成后重新启动 Codex 客户端，使通知配置生效。
-
-### 安装位置
-
-Windows 默认安装到：
-
-```text
-%LOCALAPPDATA%\CodexNotify\codex-notify.ps1
-```
-
-安装器会备份 `%USERPROFILE%\.codex\config.toml`，更新顶层 `notify` 配置，并注册当前
-用户级 `codex-notify://` 激活协议。如果现有通知命令使用 `--previous-notify` 包装其他
-回调，安装器只替换内层通知命令，保留外层回调。
-
-Linux 默认安装到：
-
-```text
-~/.local/bin/codex-notify
-```
-
-安装器会备份 `~/.codex/config.toml`，并且只管理顶层 `notify` 设置，不修改其他 Codex
-配置。
-
 ### 从仓库安装
 
-Windows：
+先克隆仓库并进入项目目录；已有克隆可直接进入目录：
+
+```bash
+git clone https://github.com/Huffer342-WSH/agent-notify.git
+cd agent-notify
+```
+
+Linux 需要 Python 3：
+
+```bash
+./install.sh --target all
+```
+
+Windows 10/11 使用系统自带的 Windows PowerShell 5.1，不需要 Python 或第三方模块：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Target all
 ```
+
+目标可选 `codex`、`claude`、`all`。不指定时仍然只配置 Codex，以保持旧版安装行为。
+安装后重启对应客户端，并在 Claude Code 中发起新会话测试。
+
+### 在线安装
 
 Linux：
 
 ```bash
-./install.sh
+curl -LsSf https://raw.githubusercontent.com/Huffer342-WSH/agent-notify/refs/heads/main/install.sh | sh -s -- --target all
 ```
 
-本地安装优先使用安装器旁边的 `codex-notify.ps1` 或 `codex-notify.py`；主程序不存在时，
-安装器自动回退到官方 Raw URL。
-
-### 安装选项
-
-安装到其他目录：
+Windows：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -InstallDir D:\Tools\CodexNotify
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Huffer342-WSH/agent-notify/refs/heads/main/install.ps1))) -Target all
 ```
+
+安装器优先使用同目录的 `agent-notify.py` 或 `agent-notify.ps1`，文件不存在时自动从上述
+仓库下载主程序。在线安装使用 `main` 分支中的最新版本。
+
+### 安装位置与配置
+
+Linux 主程序为 `~/.local/bin/agent-notify`，同目录保留 `codex-notify` 兼容命令。
+Windows 主程序为 `%LOCALAPPDATA%\AgentNotify\agent-notify.ps1`，同目录保留
+`codex-notify.ps1` 兼容入口，并注册当前用户级 `agent-notify://` 点击激活协议。
+
+安装器按所选目标修改配置：
+
+- Codex：`${CODEX_HOME:-~/.codex}/config.toml` 的顶层 `notify` 设置。
+- Claude Code：`${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json` 中的 `Stop` Hook。
+  这不是 VS Code 的 `settings.json`，插件与 CLI 共用此配置。
+
+安装器在修改前备份配置，后缀为 `.agent-notify.bak`；每次修改前的备份会覆盖上次备份。
+Claude 配置必须是有效的 JSON，解析失败时安装器报错，不覆盖原配置。安装器保留其他
+Claude 设置和 Hook，重复安装不会追加相同通知命令。
+
+Windows 安装器支持在 `--previous-notify` 包装的命令中替换内层回调。Linux 安装器只管理
+单行顶层 `notify` 配置；两种安装器均不支持多行 `notify` 数组。
+
+### 从 Codex Notify 迁移
+
+项目原名 **Codex Notify**，现仓库地址为
+[Huffer342-WSH/agent-notify](https://github.com/Huffer342-WSH/agent-notify)。
+已有用户建议从新版仓库执行一次 `--target all` / `-Target all` 安装：
+
+- 新配置改用 `agent-notify` 名称，旧命令仍可使用。
+- Linux 安装器迁移当前安装目录下的旧 `codex-notify --claude` Hook，避免重复通知。
+- Windows 安装器也识别旧默认路径 `%LOCALAPPDATA%\CodexNotify\codex-notify.ps1`，
+  迁移所选工具的旧配置。旧目录和旧协议不会自动删除，以保留旧通知及未迁移配置的可用性。
+- `AGENT_NOTIFY_INSTALL_DIR`、`AGENT_NOTIFY_SOURCE_URL` 替代原来的 `CODEX_NOTIFY_*`
+  安装变量；旧变量仍可作为回退使用。
+- 仓库中的 `codex-notify.py`、`codex-notify.ps1` 是兼容启动器，需要与新主程序放在一起。
+  手工下载单文件时应使用新的 `agent-notify.py` 或 `agent-notify.ps1`。
+
+迁移只处理当前安装目录，以及 Windows 的旧默认路径。其他自定义路径、手工包装命令
+或项目级配置需要自行检查。原来的 `.codex-notify.bak` 备份不删除。
+
+已有克隆可更新远端地址，以下以常见的 `origin` 为例：
 
 ```bash
-./install.sh --install-dir ~/bin
+git remote set-url origin https://github.com/Huffer342-WSH/agent-notify.git
 ```
 
-只安装文件而不修改 Codex 配置：
+先用 `git remote -v` 确认远端名；如果使用的是 `github`，将命令中的 `origin` 改为 `github`。
+
+### 安装选项与卸载
+
+自定义目录：
+
+```bash
+./install.sh --install-dir ~/bin --target all
+```
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -NoConfig
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -InstallDir D:\Tools\AgentNotify -Target all
 ```
+
+更新本地仓库后，可只更新已安装的程序，不修改现有 Hook 配置：
 
 ```bash
 ./install.sh --no-config
 ```
 
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -NoConfig
+```
+
+Hook 运行的是安装目录中的程序副本，仅执行 `git pull` 不会更新该副本。如果新通知仍显示
+旧图标，请重新运行安装器，再触发一轮回复；已经发出的通知不会自动更换图标。
+需要同时迁移旧名称的 Hook 配置时，应使用 `--target all` / `-Target all`，不要加 `NoConfig`。
+
 卸载：
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
-```
-
 ```bash
-./install.sh --uninstall
+./install.sh --target all --uninstall
 ```
 
-## 功能
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Target all -Uninstall
+```
 
-- 标题显示会话名称和当前工作目录。
-- 正文显示上一条问题和本轮回复摘要，过长内容会自动省略。
-- 点击通知可返回原来的 VS Code、Codex 编辑器或终端窗口。
-- 支持 VS Code、VSCodium、Cursor、Windsurf、Windows Terminal、GNOME Terminal、
-  Ghostty、Konsole、Kitty、Alacritty 和 WezTerm 等常见应用。
-- Windows 优先使用 WinRT Toast，通过 Windows Script Host 隐藏处理点击激活，不会
-  闪现命令行窗口。
-- Linux 使用 FreeDesktop Notifications，并根据桌面主题生成深色或浅色 SVG 图标。
-- Windows 只依赖系统自带的 Windows PowerShell、.NET 和 Windows API；Linux 主程序和
-  图标数据包含在单个 Python 文件中。
+改用 `claude` 或 `codex` 可只移除对应配置。另一个工具的用户级配置仍引用本次安装时，
+安装器保留共享程序和兼容入口。卸载与 `--no-config` / `-NoConfig` 组合时直接删除文件，
+不检查引用。手动配置及项目级配置需要自行移除。
 
-### Windows
+## 通知内容与图标
 
-Windows 版本请求 `duration="long"` 的 WinRT Toast；通知横幅消失后仍可在通知中心
-（`Win+N`）查看。点击通知时，脚本通过安装器注册的 `codex-notify://` 协议恢复来源窗口。
-协议不可用或 WinRT 发送失败时，脚本回退到 `System.Windows.Forms.NotifyIcon`。
+Codex 通知显示会话名称、工作目录、最近的问题和回复摘要。会话名称通过载荷以及 VS Code
+系编辑器的 `state.vscdb`、Codex 的 `state_*.sqlite` 查询，失败时显示未命名会话。
 
-Toast 正文左侧使用脚本内嵌并缓存到 `%LOCALAPPDATA%\CodexNotify` 的 Codex SVG 图标。
-脚本读取 Windows 应用主题，深色主题使用浅色图标，浅色主题使用深色图标。Windows 11
-顶部归属区域的应用图标由 PowerShell AppID 决定，不能通过 Toast XML 覆盖，因此顶部
-仍可能同时显示 PowerShell 图标。
+Claude 通知标题显示 `Claude Code` 和工作目录，正文显示 `last_assistant_message` 中的
+最终回复摘要；旧版 Hook 未提供摘要时显示完成提示。不读取 Claude 会话标题、问题或历史。
+只处理主会话的 `Stop`，不处理权限请求、`Notification`、`SubagentStop` 或失败事件。
+其他 Stop Hook 如果要求 Claude 继续工作，后续再次触发 Stop 时仍会提醒，因此通知不表示
+所有 Hook 均已允许会话结束。
 
-Windows 最终决定横幅停留时间。`NotifyIcon.ShowBalloonTip()` 的毫秒参数在现代 Windows
-中不是持续时间保证。如需延长横幅，请在“设置 → 辅助功能 → 视觉效果 → 在此时间后关闭
-通知”中调整。安装器只显示警告，不修改这项系统全局设置。
+图标按通知来源选择，SVG 数据内嵌在主程序中，不需要联网：
+
+- Codex：深色主题使用浅色图标，浅色主题使用深色图标。
+- Claude：使用星芒图标，浅色主题为陶土橙，深色主题为浅橙；路径取自
+  [Simple Icons](https://simpleicons.org/?q=claude)（CC0）。
+
+Linux 图标缓存到 `/tmp/agent-notify-<uid>/`，Windows 缓存到 `%LOCALAPPDATA%\AgentNotify`。
+通知正文会显示部分问题或回复，可能在共享屏幕或锁屏时暴露内容。可以降低脚本顶部的
+`QUESTION_PREVIEW_LIMIT`、`ANSWER_PREVIEW_LIMIT`，或关闭系统锁屏通知预览。
+
+## 桌面支持
 
 ### Linux
 
-Linux 需要实现 `org.freedesktop.Notifications` 的桌面通知服务。Ubuntu/Debian 推荐：
+需要实现 `org.freedesktop.Notifications` 的桌面通知服务。Ubuntu/Debian 推荐安装：
 
 ```bash
 sudo apt install python3-gi libnotify-bin x11-utils
 ```
 
-可选组件：
+主程序优先使用 PyGObject 的持久 D-Bus 连接接收点击动作，缺失时回退到 `notify-send`。
+`xprop` 和 `libX11` 用于 X11 窗口定位与激活，`xdotool`、`wmctrl` 提供额外回退。
+支持 VS Code、VSCodium、Cursor、Windsurf、GNOME Terminal、Ghostty、Konsole、Kitty、
+Alacritty、WezTerm 等常见应用。
 
-- `python3-gi`：持久 D-Bus 连接和点击动作。
-- `notify-send`：PyGObject 缺失时的回退。
-- `xprop` 和 `libX11`：X11 下定位并激活窗口。
-- `xdotool` 或 `wmctrl`：额外的 X11 窗口激活回退。
+重点验证环境为 Ubuntu 22.04、GNOME、X11。Wayland 通常限制后台激活其他应用，基础通知
+仍可使用，但精确返回某个窗口取决于合成器和应用实现。
 
-当前重点验证环境为 Ubuntu 22.04、GNOME、X11、VS Code Codex 插件、GNOME Terminal
-和 Ghostty。Wayland 通常限制后台进程激活其他应用，因此基础通知仍可使用，但精确返回
-某个终端窗口取决于合成器和终端实现。
+### Windows
 
-### 隐私
+优先使用 WinRT Toast，点击通知经 `agent-notify://` 协议和隐藏的 Windows Script Host
+启动器恢复来源窗口，不闪现命令行窗口。协议未安装或 WinRT 失败时回退到
+`System.Windows.Forms.NotifyIcon`。
 
-通知正文会显示部分用户问题和 Codex 回复。共享屏幕或锁屏通知可能暴露这些内容；可在
-脚本中降低 `QUESTION_PREVIEW_LIMIT`、`ANSWER_PREVIEW_LIMIT`，或关闭系统锁屏通知
-预览。
+Toast 正文左侧显示来源对应的 SVG 图标。Windows 11 顶部归属区域由 PowerShell AppID
+决定，仍可能显示 PowerShell 图标。`NotifyIcon` 不支持 SVG，使用来源应用或系统图标。
 
-## 开发
+Toast 请求 `duration="long"`，横幅消失后可在通知中心查看。实际停留时间由 Windows 决定；
+如需延长，请在“设置 → 辅助功能 → 视觉效果 → 在此时间后关闭通知”中调整。
+安装器只显示提醒，不修改系统全局设置。
 
-### 手动测试
+### 远程环境
 
-Windows：
+VS Code Remote SSH、WSL 和容器中的 Hook 在远端环境执行，不会自动把通知转发到本地
+桌面。通知外观、动作支持和窗口激活最终取决于操作系统及桌面通知服务。
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexNotify\codex-notify.ps1" '{"type":"agent-turn-complete","thread-id":"test-thread","turn-id":"test-turn","cwd":"C:\\Projects\\example-project","input-messages":["测试 Windows 桌面通知"],"last-assistant-message":"通知脚本工作正常。"}'
-```
+## 开发与测试
 
-Linux：
+### 手动发送通知
+
+Linux Codex 载荷：
 
 ```bash
-~/.local/bin/codex-notify '{
-  "type": "agent-turn-complete",
-  "thread-id": "test-thread",
-  "turn-id": "test-turn",
-  "cwd": "/tmp/example-project",
-  "input-messages": ["测试 Linux 桌面通知"],
-  "last-assistant-message": "通知脚本工作正常。"
-}'
+~/.local/bin/agent-notify '{"type":"agent-turn-complete","thread-id":"test-thread","cwd":"/tmp/example-project","input-messages":["测试通知"],"last-assistant-message":"通知测试完成。"}'
 ```
 
-手动测试会发送一条真实桌面通知。
+Linux Claude 载荷通过标准输入传入：
 
-### Codex 通知接口
+```bash
+printf '%s' '{"hook_event_name":"Stop","session_id":"test-claude","cwd":"/tmp/example-project","last_assistant_message":"Claude 通知测试完成。"}' | ~/.local/bin/agent-notify --claude
+```
 
-Codex 在回合完成时执行顶层 `notify` 配置的程序，并将事件作为单个 JSON 参数传入。脚本
-只处理 `agent-turn-complete`：
+Windows Codex 载荷：
 
-| 字段 | 用途 |
-| --- | --- |
-| `thread-id` | 查询会话标题，并作为通知同步标识 |
-| `cwd` | 显示工作目录，并辅助识别编辑器窗口 |
-| `input-messages` | 从末尾向前选择最后一条非空问题 |
-| `last-assistant-message` | 生成本轮回复摘要 |
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AgentNotify\agent-notify.ps1" '{"type":"agent-turn-complete","thread-id":"test-thread","cwd":"C:\\Projects\\example","input-messages":["测试通知"],"last-assistant-message":"通知测试完成。"}'
+```
 
-Linux 配置示例：
+以上命令会发送真实桌面通知。
+
+### Hook 配置示例
+
+Codex 顶层配置接收单个 JSON 参数：
 
 ```toml
-notify = ["/home/用户名/.local/bin/codex-notify"]
+notify = ["/home/用户名/.local/bin/agent-notify"]
 ```
 
-Windows 配置示例：
+Claude 在 `settings.json` 中注册命令，并通过标准输入传递 JSON：
 
-```toml
-notify = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\Users\\用户名\\AppData\\Local\\CodexNotify\\codex-notify.ps1"]
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/用户名/.local/bin/agent-notify --claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-### Windows 实现
+Windows 使用 `-Claude` 读取标准输入；安装器生成 PowerShell `-EncodedCommand` 命令，
+避免路径被 Hook Shell 再次解释。脚本不输出决策 JSON，不要求 Claude 继续工作。
 
-Windows 入口进程解析通知内容、识别来源窗口，然后直接发送 WinRT Toast。只有协议未
-安装或 WinRT 发送失败时，才启动隐藏的 `-Serve` 子进程并使用 `NotifyIcon` 回退。
+参考：[Claude Hook 接口](https://code.claude.com/docs/en/hooks#stop)、
+[VS Code 配置](https://code.claude.com/docs/en/vs-code#configure-settings)。
 
-脚本通过 `Get-StartApps` 读取实际注册的 Windows PowerShell AppID。Toast 将来源窗口
-信息编码进 `codex-notify://` URI，点击后由 `wscript.exe` 隐藏启动 PowerShell，解码并
-激活窗口。会话标题通过 Windows 自带的 `winsqlite3.dll` 只读查询 VS Code 系编辑器的
-`state.vscdb` 和 Codex 的 `state_*.sqlite`。
+### 自动测试
 
-### Linux 实现
+```bash
+python3 -m unittest discover -s tests -v
+sh -n install.sh
+```
 
-Linux 入口进程记录父进程链，再使用 `start_new_session=True` 启动独立的 `--serve`
-子进程。主路径通过 PyGObject 的 `Gio` 调用 FreeDesktop Notifications D-Bus 接口；
-PyGObject 不可用时回退到 `notify-send`。
+有 PowerShell 运行时时，还可以验证安装器的配置逻辑（不写注册表、不发送通知）：
 
-点击通知后依次尝试 `WINDOWID`/`xdotool`、`libX11` EWMH 消息、`xprop` 窗口匹配、
-编辑器 `--reuse-window`，最后使用 `wmctrl`。这些精确激活路径主要适用于 X11。
+```powershell
+pwsh -NoProfile -File tests/test_install.ps1
+```
 
-### 标题、正文与图标
+Windows PowerShell 5.1 可将上述命令中的 `pwsh` 替换为 `powershell.exe`。
 
-会话标题优先读取通知载荷中的标题字段，然后查询 VS Code 系编辑器的 `state.vscdb` 和
-Codex 的 `state_*.sqlite`，失败时使用“未命名会话”。Linux 标题格式为
-`《会话名称》 @ 目录`，Windows 使用 `[会话名称] @ 目录`。
+测试覆盖通知内容、图标、标准输入、安装配置保留、重复安装、旧名迁移及选择性卸载，
+不发送真实通知。Windows Toast 和 VS Code 点击返回仍需在对应桌面环境中验证。
 
-正文会压缩换行和连续空白，并根据脚本顶部的长度常量截断。Linux 的 SVG path 数据直接
-内嵌在 Python 文件中，运行时根据 GTK、KDE、GNOME 和终端主题信息选择前景色，然后缓存
-到 `/tmp/codex-notify-<uid>/`。
-
-### 兼容性边界
-
-通知外观、停留时间、动作支持和窗口激活能力最终由操作系统、桌面通知服务以及
-X11/Wayland 决定。所有增强功能均采用可选依赖和逐级回退设计。
+主要文件：`agent-notify.py`、`agent-notify.ps1` 为主程序；`install.sh`、`install.ps1`
+负责安装和配置；`tests/test_notify.py` 包含单元测试与 Linux 安装集成测试，
+`tests/test_install.ps1` 验证 PowerShell 安装器的配置迁移。
