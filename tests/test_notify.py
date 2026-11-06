@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -85,6 +86,46 @@ class NotificationTests(unittest.TestCase):
                 patch.object(notify, "notify") as send:
             self.assertEqual(notify.main(), 0)
             send.assert_not_called()
+
+
+class SessionNameTests(unittest.TestCase):
+    def test_bad_database_does_not_hide_valid_titles_or_block_notification(self):
+        for source in ("codex", "vscode"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                broken = root / "state_broken.sqlite"
+                broken.symlink_to(root / "missing")
+                databases = [broken]
+                with patch.object(notify, "codex_home", return_value=root), \
+                        patch.object(Path, "glob", side_effect=lambda *args: databases if source == "vscode" else []):
+                    for age, name in ((10, "Older"), (20, "Newest")):
+                        database = root / f"state_{age}.sqlite"
+                        with sqlite3.connect(database) as connection:
+                            if source == "codex":
+                                connection.execute("CREATE TABLE threads (id TEXT, name TEXT, title TEXT)")
+                                connection.execute("INSERT INTO threads VALUES (?, ?, ?)", ("test", name, "Fallback"))
+                            else:
+                                connection.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
+                                connection.execute("INSERT INTO ItemTable VALUES (?, ?)", (
+                                    "agentSessions.model.cache",
+                                    json.dumps([{"resource": "codex/test", "label": name}]),
+                                ))
+                        os.utime(database, (age, age))
+                        databases.append(database)
+                    self.assertEqual(notify.session_name("test", ""), "Newest")
+                    # Keep enumerated paths to simulate deletion between discovery and stat.
+                    for database in databases[1:]:
+                        database.unlink()
+                    self.assertEqual(notify.session_name("test", ""), "未命名会话")
+                    with patch.object(notify, "source_context", return_value=("", [], "", "", "")), \
+                            patch.object(notify, "notification_python", return_value=sys.executable), \
+                            patch.object(notify.subprocess, "Popen") as spawn:
+                        self.assertEqual(notify.notify({"type": "agent-turn-complete", "thread-id": "test"}), 0)
+                        spawn.assert_called_once()
+
+    def test_stat_permission_error_is_skipped(self):
+        with patch.object(Path, "stat", side_effect=PermissionError):
+            self.assertEqual(notify.databases_by_mtime([Path("unreadable")]), [])
 
 
 class IconTests(unittest.TestCase):

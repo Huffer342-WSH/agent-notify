@@ -192,6 +192,17 @@ def notification_icon(provider: str = "codex") -> str:
     return str(icon_path)
 
 
+def databases_by_mtime(paths: list[Path]) -> list[Path]:
+    readable = []
+    for path in paths:
+        try:
+            readable.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    readable.sort(key=lambda item: item[0], reverse=True)
+    return [path for _mtime, path in readable]
+
+
 def vscode_session_name(thread_id: str) -> str:
     """Read the label shown by VS Code's Codex session list."""
     if not thread_id:
@@ -212,7 +223,7 @@ def vscode_session_name(thread_id: str) -> str:
     databases: list[Path] = []
     for root in storage_roots:
         databases.extend(root.glob("*/state.vscdb"))
-    databases.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    databases = databases_by_mtime(databases)
 
     resource_suffix = f"/{thread_id}"
     for database in databases:
@@ -245,10 +256,8 @@ def session_name(thread_id: str, cwd: str) -> str:
     if vscode_name:
         return vscode_name
     if thread_id:
-        databases = sorted(
-            glob.glob(str(codex_home() / "state_*.sqlite")),
-            key=lambda item: os.path.getmtime(item),
-            reverse=True,
+        databases = databases_by_mtime(
+            [Path(item) for item in glob.glob(str(codex_home() / "state_*.sqlite"))]
         )
         for database in databases:
             try:
