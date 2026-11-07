@@ -1,4 +1,4 @@
-# Configuration-only tests. No registry writes or desktop notifications.
+# Configuration and migration tests. No real registry writes or desktop notifications.
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 
@@ -64,6 +64,88 @@ try {
     Assert-True (Test-SharedConfiguration) "Nested callback reference not detected"
     [void](Update-CodexConfig "Uninstall")
     Assert-True (([IO.File]::ReadAllText($configPath)).Trim() -eq 'notify = ["outer"]') "Outer callback was not preserved"
+
+    # Fake only the legacy registry entry; filesystem operations remain real.
+    $script:oldProtocolCommand = $null
+    function Test-Path {
+        param([string]$LiteralPath, [string]$PathType)
+        if ($LiteralPath.StartsWith("HKCU:")) { return $null -ne $script:oldProtocolCommand }
+        Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+    }
+    function Get-Item {
+        param([string]$LiteralPath)
+        if ($LiteralPath.StartsWith("HKCU:")) {
+            $item = [pscustomobject]@{}
+            $item | Add-Member ScriptMethod GetValue { param($name) $script:oldProtocolCommand }
+            return $item
+        }
+        Microsoft.PowerShell.Management\Get-Item @PSBoundParameters
+    }
+    function Set-Item {
+        param([string]$LiteralPath, [string]$Value)
+        Assert-True ($LiteralPath -eq "HKCU:\Software\Classes\codex-notify\shell\open\command") "Unexpected registry write"
+        $script:oldProtocolCommand = $Value
+    }
+    [void](New-Item -ItemType Directory -Path $InstallDir, (Split-Path -Parent $legacyDefaultPath) -Force)
+    $fixtureRoot = Join-Path $PSScriptRoot "fixtures/legacy"
+    $pythonPath = Join-Path $InstallDir "codex-notify.py"
+    $pythonText = [IO.File]::ReadAllText((Join-Path $fixtureRoot "codex-notify.py")).Replace("`r`n", "`n")
+    $powershellText = [IO.File]::ReadAllText((Join-Path $fixtureRoot "codex-notify.ps1"))
+    Set-Utf8Text $legacyDefaultPath $powershellText
+    # Git checkouts and Windows editors can change line endings and add a BOM.
+    [IO.File]::WriteAllText($pythonPath, $pythonText.Replace("`n", "`r`n"), (New-Object Text.UTF8Encoding($true)))
+    Set-Utf8Text $legacyPath ($powershellText + "`n# user change")
+    $script:oldProtocolCommand = '"wscript.exe" "' + (Join-Path (Split-Path -Parent $legacyDefaultPath) "codex-notify-activate.vbs") + '" "%1"'
+    $NoConfig = $true
+    Remove-KnownLegacyScripts
+    Assert-True (Test-Path -LiteralPath $pythonPath) "NoConfig removed an old script"
+    $NoConfig = $false
+    Set-Utf8Text $configPath ("notify = [`"python`", " + (ConvertTo-JsonString $pythonPath) + "]`n")
+    Remove-KnownLegacyScripts
+    Assert-True (Test-Path -LiteralPath $pythonPath) "Referenced Python script removed"
+    Assert-True (Test-Path -LiteralPath $legacyPath) "Modified script removed"
+    Assert-True (-not (Test-Path -LiteralPath $legacyDefaultPath)) "Known PowerShell script retained"
+    Assert-True ($script:oldProtocolCommand -eq (Get-ActivationProtocolCommand)) "Old notification protocol not migrated"
+    Update-SelectedConfig "Install"
+    Remove-KnownLegacyScripts
+    Assert-True (-not (Test-Path -LiteralPath $pythonPath)) "Known Python script retained after migration"
+    Set-Utf8Text $legacyDefaultPath $powershellText
+    $script:oldProtocolCommand = '"custom-launcher.exe"'
+    Remove-KnownLegacyScripts
+    Assert-True (Test-Path -LiteralPath $legacyDefaultPath) "Script with unknown protocol removed"
+    $script:oldProtocolCommand = $null
+    Set-Utf8Text $claudeConfigPath (ConvertTo-Json -Depth 10 -InputObject ([pscustomobject]@{
+        hooks = @{ Stop = @(@{ hooks = @(@{ type = "command"; command = (Get-ClaudeCommand $legacyDefaultPath) }) }) }
+    }))
+    Remove-KnownLegacyScripts
+    Assert-True (Test-Path -LiteralPath $legacyDefaultPath) "Other client's reference was ignored"
+    Update-ClaudeConfig "Install"
+    Remove-KnownLegacyScripts
+    Assert-True (-not (Test-Path -LiteralPath $legacyDefaultPath)) "Migrated script retained"
+
+    # Run the real installation body with network and Windows-only side effects replaced.
+    function Invoke-WebRequest {
+        param($Uri, $OutFile, [switch]$UseBasicParsing)
+        Copy-Item -LiteralPath (Join-Path $root "agent-notify.ps1") -Destination $OutFile
+    }
+    function Update-ActivationProtocol {
+        param($Mode)
+        Assert-True (Test-Path -LiteralPath $installPath) "Protocol configured before script installation"
+        Assert-True (Test-Path -LiteralPath $launcherPath) "Activation launcher missing"
+        Assert-True (([IO.File]::ReadAllText($configPath)).Contains((Get-NotifyConfiguration $installPath).Direct)) "Protocol configured before config migration"
+        return $true
+    }
+    function Write-NotificationDurationWarning {}
+    Set-Utf8Text $legacyPath $powershellText
+    Set-Utf8Text $pythonPath $pythonText
+    Set-Utf8Text $configPath ((Get-NotifyConfiguration $legacyPath).Direct + "`n")
+    . ([scriptblock]::Create($source.Substring($boundary)))
+    Assert-True (Test-Path -LiteralPath $installPath) "New script missing after installation"
+    Assert-True (-not (Test-Path -LiteralPath $legacyPath)) "Installer recreated old PowerShell copy"
+    Assert-True (-not (Test-Path -LiteralPath $pythonPath)) "Installer retained old Python copy"
+    Assert-True (([IO.File]::ReadAllText($launcherPath)).Contains('"agent-notify.ps1"')) "Launcher points at old script"
+    Remove-Item Function:\Invoke-WebRequest, Function:\Update-ActivationProtocol, Function:\Write-NotificationDurationWarning
+    Remove-Item Function:\Test-Path, Function:\Get-Item, Function:\Set-Item
 
     # A malformed JSON file must remain untouched.
     Set-Utf8Text $claudeConfigPath "{broken"

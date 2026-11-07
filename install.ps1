@@ -122,6 +122,12 @@ function Update-ActivationProtocol {
             return $false
         }
         Remove-Item -LiteralPath $protocolPath -Recurse -Force
+        $oldProtocolPath = "HKCU:\Software\Classes\codex-notify"
+        $oldCommandPath = Join-Path $oldProtocolPath "shell\open\command"
+        if ((Test-Path -LiteralPath $oldCommandPath) -and
+            (Get-Item -LiteralPath $oldCommandPath).GetValue("") -eq $expectedCommand) {
+            Remove-Item -LiteralPath $oldProtocolPath -Recurse -Force
+        }
         return $true
     }
 
@@ -291,8 +297,9 @@ function Update-SelectedConfig {
 }
 
 function Test-SharedConfiguration {
+    param([string[]]$Paths = @($installPath, $legacyPath))
     # Only files installed in this directory depend on this installation.
-    foreach ($path in @($installPath, $legacyPath)) {
+    foreach ($path in $Paths) {
         if (Test-Path -LiteralPath $configPath) {
             $text = [IO.File]::ReadAllText($configPath)
             $escaped = ConvertTo-JsonString $path
@@ -303,9 +310,59 @@ function Test-SharedConfiguration {
         if (Test-Path -LiteralPath $claudeConfigPath) {
             $text = [IO.File]::ReadAllText($claudeConfigPath)
             if ($text.Contains((Get-ClaudeCommand $path))) { return $true }
+            if ($text.Contains($path) -or $text.Contains((ConvertTo-JsonString $path).Trim('"'))) { return $true }
         }
     }
     return $false
+}
+
+function Remove-KnownLegacyScripts {
+    if ($NoConfig) { return }
+    # SHA256 of historical UTF-8 content, ignoring BOM and CRLF checkout differences.
+    $knownHashes = @(
+        "fb37396324e5c35339fefddd8d24400200e6c4c05a70b05727a258c43230472f", # 50dab9e Python wrapper
+        "8c4e60dd9e183d8ef0dbbb1e000df9eaca77a7d5ffe28286cb11fe837d3a7159", # 50dab9e PowerShell wrapper
+        "6d4212e21afa2eb1d7027c6b7904d0e345a2990c77f644cbd6b88b8571a37f30", # 50dab9e installed PowerShell copy
+        "9c72604a4ab848c74b7a6dcaf22cf6c751ce2ffd2c5d5564c8468ef8e0c58258", # eb8c321 Python
+        "0a837c7e6ea9aa39afb74e971e73def6beeee81ba21d5dece7d94cf33a7e71cb", # eb8c321 PowerShell
+        "95408f180f392470b34a052a79dd2bd9bf1608e499d10654cc5ed1ea46e2ed96", # c63aee5 PowerShell
+        "f39af893ab4d2129e184bdf4c1269a736dee25c74e8f7494857763875c9a28e1"  # d186ac4 Python
+    )
+    $directories = @($InstallDir, (Split-Path -Parent $legacyDefaultPath)) | Select-Object -Unique
+    foreach ($directory in $directories) {
+        foreach ($name in @("codex-notify.ps1", "codex-notify.py")) {
+            $path = Join-Path $directory $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            $item = Get-Item -LiteralPath $path
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+            $content = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8).Replace("`r`n", "`n")
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+                $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($content))).Replace("-", "").ToLowerInvariant()
+            } finally { $sha.Dispose() }
+            if ($hash -notin $knownHashes -or (Test-SharedConfiguration -Paths @($path))) {
+                Write-Warning "Retained modified, unknown, or still-referenced legacy script: $path"
+                continue
+            }
+            # Existing notification clicks must reach the new script before the old one is removed.
+            if ($name -eq "codex-notify.ps1") {
+                $oldCommandPath = "HKCU:\Software\Classes\codex-notify\shell\open\command"
+                if (Test-Path -LiteralPath $oldCommandPath) {
+                    $oldLauncher = Join-Path $directory "codex-notify-activate.vbs"
+                    $expected = '"wscript.exe" "' + $oldLauncher.Replace('"', '\"') + '" "%1"'
+                    $current = (Get-Item -LiteralPath $oldCommandPath).GetValue("")
+                    if ($current -eq $expected) {
+                        Set-Item -LiteralPath $oldCommandPath -Value (Get-ActivationProtocolCommand)
+                    } elseif ($current -ne (Get-ActivationProtocolCommand)) {
+                        Write-Warning "Retained legacy script because its activation protocol is unrecognized: $path"
+                        continue
+                    }
+                }
+            }
+            Remove-Item -LiteralPath $path -Force
+            Write-Host "Removed known legacy script: $path"
+        }
+    }
 }
 
 if ($Uninstall) {
@@ -372,7 +429,6 @@ try {
     }
 
     Move-Item -LiteralPath $temporaryPath -Destination $installPath -Force
-    Copy-Item -LiteralPath $installPath -Destination $legacyPath -Force
     Install-ActivationLauncher
 } finally {
     if (Test-Path -LiteralPath $temporaryPath) {
@@ -383,6 +439,7 @@ try {
 if (-not $NoConfig) {
     Update-SelectedConfig "Install"
     [void](Update-ActivationProtocol "Install")
+    Remove-KnownLegacyScripts
 }
 
 Write-Host "Installed $programName to $installPath"

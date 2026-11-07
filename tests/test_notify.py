@@ -29,11 +29,6 @@ class NotificationTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(notify.notify_environment("SOURCE_KIND", "unknown"), "unknown")
 
-    def test_old_source_launcher(self):
-        result = subprocess.run([sys.executable, str(ROOT / "codex-notify.py"), "--claude"],
-                                input='{"hook_event_name":"SubagentStop"}', capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
     def test_claude_content_without_codex_database(self):
         payload = {"hook_event_name": "Stop", "session_id": "claude-1",
                    "cwd": "/projects/project", "last_assistant_message": "完成 <测试> & 检查"}

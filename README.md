@@ -52,8 +52,8 @@ Windows：
 ### 安装位置与配置
 
 Linux 主程序为 `~/.local/bin/agent-notify`，同目录保留 `codex-notify` 兼容命令。
-Windows 主程序为 `%LOCALAPPDATA%\AgentNotify\agent-notify.ps1`，同目录保留
-`codex-notify.ps1` 兼容入口，并注册当前用户级 `agent-notify://` 点击激活协议。
+Windows 主程序为 `%LOCALAPPDATA%\AgentNotify\agent-notify.ps1`，注册当前用户级
+`agent-notify://` 点击激活协议，不再安装 `codex-notify.ps1` 副本。
 
 安装器按所选目标修改配置：
 
@@ -74,14 +74,18 @@ Windows 安装器支持在 `--previous-notify` 包装的命令中替换内层回
 [Huffer342-WSH/agent-notify](https://github.com/Huffer342-WSH/agent-notify)。
 已有用户建议从新版仓库执行一次 `--target all` / `-Target all` 安装：
 
-- 新配置改用 `agent-notify` 名称，旧命令仍可使用。
+- 新配置改用 `agent-notify` 名称；Linux 仍安装 `codex-notify` 兼容命令。
 - Linux 安装器迁移当前安装目录下的旧 `codex-notify --claude` Hook，避免重复通知。
 - Windows 安装器也识别旧默认路径 `%LOCALAPPDATA%\CodexNotify\codex-notify.ps1`，
-  迁移所选工具的旧配置。旧目录和旧协议不会自动删除，以保留旧通知及未迁移配置的可用性。
+  迁移所选工具的旧配置。新程序、配置和协议安装成功后，检查当前安装目录及旧默认目录
+  中的 `codex-notify.ps1`、`codex-notify.py`，仅删除内容 SHA256 匹配已知历史版本且
+  不再被用户级配置引用的文件。计算哈希时忽略 UTF-8 BOM 和 CRLF/LF 差异；修改过的、
+  未知版本及符号链接会保留。已知旧点击协议迁移到新启动器，以支持旧通知点击。
+  `-NoConfig` 不清理旧脚本；其他自定义目录和项目级 Hook 不会自动扫描，需先手动迁移。
 - `AGENT_NOTIFY_INSTALL_DIR`、`AGENT_NOTIFY_SOURCE_URL` 替代原来的 `CODEX_NOTIFY_*`
   安装变量；旧变量仍可作为回退使用。
-- 仓库中的 `codex-notify.py`、`codex-notify.ps1` 是兼容启动器，需要与新主程序放在一起。
-  手工下载单文件时应使用新的 `agent-notify.py` 或 `agent-notify.ps1`。
+- 仓库根目录已移除 `codex-notify.py`、`codex-notify.ps1` 兼容启动器。
+  手工调用或下载脚本时请使用 `agent-notify.py` 或 `agent-notify.ps1`。
 
 迁移只处理当前安装目录，以及 Windows 的旧默认路径。其他自定义路径、手工包装命令
 或项目级配置需要自行检查。原来的 `.codex-notify.bak` 备份不删除。
